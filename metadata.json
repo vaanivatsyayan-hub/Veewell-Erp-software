@@ -1,0 +1,7 @@
+{
+  "name": "Veewell Lifescience ERP",
+  "description": "A comprehensive, GST-compliant ERP accounting system for Indian businesses, featuring sales, purchases, BOM, and financial reporting.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
