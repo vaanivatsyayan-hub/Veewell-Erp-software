@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { useERP } from '../store/context';
 import { Item, Account, Invoice, InvoiceItem } from '../types';
-import { Plus, Trash2, Save, Printer, ArrowLeft, MapPin, Building2, CreditCard, Edit } from 'lucide-react';
+import { Plus, Trash2, Save, Printer, ArrowLeft, MapPin, Building2, CreditCard, Edit, Hash, Info } from 'lucide-react';
 
 export const Sales: React.FC = () => {
   const { items, accounts, addInvoice, updateInvoice, deleteInvoice, invoices, companySettings } = useERP();
@@ -11,14 +11,20 @@ export const Sales: React.FC = () => {
 
   // Form State
   const [customerId, setCustomerId] = useState('');
+  const [manualInvoiceNo, setManualInvoiceNo] = useState('');
   const [invoiceItems, setInvoiceItems] = useState<Partial<InvoiceItem>[]>([]);
   const [editInvoiceId, setEditInvoiceId] = useState<string | null>(null);
 
   const selectedCustomer = useMemo(() => accounts.find(a => a.id === customerId), [customerId, accounts]);
-  const isInterstate = selectedCustomer && selectedCustomer.state !== companySettings.state;
+  
+  // Normalized state comparison to handle whitespace/case sensitivity
+  const isInterstate = useMemo(() => {
+    if (!selectedCustomer || !companySettings.state) return false;
+    return selectedCustomer.state?.trim().toLowerCase() !== companySettings.state.trim().toLowerCase();
+  }, [selectedCustomer, companySettings.state]);
 
   const addItemRow = () => {
-    setInvoiceItems([...invoiceItems, { itemId: '', qty: 1, rate: 0, amount: 0 }]);
+    setInvoiceItems([...invoiceItems, { itemId: '', qty: 1, rate: 0, amount: 0, gstRate: 0, name: '', hsn: '' }]);
   };
 
   const updateItemRow = (index: number, field: string, value: any) => {
@@ -33,6 +39,12 @@ export const Sales: React.FC = () => {
         row.hsn = item.hsn;
         row.rate = item.salePrice;
         row.gstRate = item.gstRate;
+      } else {
+        row.itemId = '';
+        row.name = '';
+        row.hsn = '';
+        row.rate = 0;
+        row.gstRate = 0;
       }
     } else {
       row[field] = value;
@@ -56,16 +68,19 @@ export const Sales: React.FC = () => {
   const total = subTotal + totalGST;
 
   const handleSave = () => {
-    if (!selectedCustomer) return alert('Select a customer');
-    if (invoiceItems.length === 0) return alert('Add at least one item');
+    if (!manualInvoiceNo.trim()) return alert('Please enter an Invoice Number');
+    if (!customerId) return alert('Please select a customer');
+    
+    const validItems = invoiceItems.filter(item => item.itemId && item.itemId !== '') as InvoiceItem[];
+    if (validItems.length === 0) return alert('Please add at least one valid item');
 
     const invoiceData: Invoice = {
       id: editInvoiceId || Date.now().toString(),
-      invoiceNo: selectedInvoice?.invoiceNo || `${companySettings.invoicePrefix}-${invoices.filter(i => i.type === 'Sales').length + 1001}`,
+      invoiceNo: manualInvoiceNo.trim(),
       date: selectedInvoice?.date || new Date().toISOString().split('T')[0],
       accountId: customerId,
-      accountName: selectedCustomer.name,
-      items: invoiceItems as InvoiceItem[],
+      accountName: selectedCustomer?.name || 'Unknown Customer',
+      items: validItems,
       subTotal,
       cgst,
       sgst,
@@ -76,19 +91,24 @@ export const Sales: React.FC = () => {
       type: 'Sales'
     };
 
-    if (view === 'edit') {
-      updateInvoice(invoiceData);
-    } else {
-      addInvoice(invoiceData);
+    try {
+      if (view === 'edit' && editInvoiceId) {
+        updateInvoice(invoiceData);
+      } else {
+        addInvoice(invoiceData);
+      }
+      resetForm();
+    } catch (error) {
+      console.error("Save failed:", error);
+      alert("Error saving invoice.");
     }
-
-    resetForm();
   };
 
   const resetForm = () => {
     setView('list');
     setInvoiceItems([]);
     setCustomerId('');
+    setManualInvoiceNo('');
     setEditInvoiceId(null);
     setSelectedInvoice(null);
   };
@@ -96,14 +116,16 @@ export const Sales: React.FC = () => {
   const handleEdit = (inv: Invoice) => {
     setEditInvoiceId(inv.id);
     setCustomerId(inv.accountId);
+    setManualInvoiceNo(inv.invoiceNo);
     setInvoiceItems([...inv.items]);
     setSelectedInvoice(inv);
     setView('edit');
   };
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
-    if (window.confirm("Warning: Deleting this sales invoice will revert stock quantities (add back to inventory) and reduce customer outstanding balance. Do you want to continue?")) {
+    if (window.confirm("CAUTION: Deleting this sales invoice will PERMANENTLY revert stock quantities and customer balances. Do you wish to proceed?")) {
       deleteInvoice(id);
     }
   };
@@ -113,10 +135,10 @@ export const Sales: React.FC = () => {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-300">
         <div className="p-6 border-b border-slate-200 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button onClick={resetForm} className="p-2 hover:bg-slate-100 rounded"><ArrowLeft size={20}/></button>
+            <button type="button" onClick={resetForm} className="p-2 hover:bg-slate-100 rounded"><ArrowLeft size={20}/></button>
             <h2 className="text-xl font-bold">{view === 'edit' ? 'Edit Sales Invoice' : 'New Sales Invoice'}</h2>
           </div>
-          <button onClick={handleSave} className="bg-blue-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-800 transition-all">
+          <button type="button" onClick={handleSave} className="bg-blue-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-800 transition-all shadow-md">
             <Save size={18}/> {view === 'edit' ? 'Update Invoice' : 'Save Invoice'}
           </button>
         </div>
@@ -128,7 +150,7 @@ export const Sales: React.FC = () => {
               <select 
                 value={customerId} 
                 onChange={(e) => setCustomerId(e.target.value)}
-                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-slate-50 p-2"
+                className="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-slate-50 p-2 font-bold"
               >
                 <option value="">Select Customer</option>
                 {accounts.filter(a => a.type === 'Customer').map(a => (
@@ -137,16 +159,27 @@ export const Sales: React.FC = () => {
               </select>
             </label>
             {selectedCustomer && (
-              <div className="text-xs text-slate-500 flex gap-4 animate-in fade-in">
-                <span className="flex items-center gap-1"><MapPin size={12}/> {selectedCustomer.state}</span>
-                <span className="font-bold uppercase text-blue-700">GST: {isInterstate ? 'IGST (Inter-state)' : 'CGST/SGST (Intra-state)'}</span>
+              <div className="bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-center gap-3 animate-in slide-in-from-left-2">
+                <Info size={18} className="text-blue-600 shrink-0"/>
+                <div className="text-xs">
+                  <p className="font-bold text-slate-800 tracking-wide uppercase">Tax Profile: {isInterstate ? 'Inter-state (IGST)' : 'Intra-state (CGST+SGST)'}</p>
+                  <p className="text-slate-500 mt-0.5">Place of Supply: {selectedCustomer.state}</p>
+                </div>
               </div>
             )}
           </div>
-          <div className="text-right">
-            <p className="text-slate-500 text-sm">Invoice Details</p>
-            <p className="font-bold text-lg">{view === 'edit' ? selectedInvoice?.invoiceNo : 'AUTO-GENERATE'}</p>
-            <p className="text-xs text-slate-400 font-medium">{view === 'edit' ? `Dated: ${selectedInvoice?.date}` : `Date: ${new Date().toLocaleDateString('en-IN')}`}</p>
+          <div className="space-y-4 md:text-right">
+            <label className="block">
+              <span className="text-sm font-semibold text-slate-700 flex items-center md:justify-end gap-1"><Hash size={14}/> Invoice Number</span>
+              <input 
+                type="text" 
+                value={manualInvoiceNo}
+                onChange={(e) => setManualInvoiceNo(e.target.value)}
+                placeholder="VWL/24-25/001"
+                className="mt-1 block w-full md:w-64 md:ml-auto rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 bg-slate-50 p-2 font-black"
+              />
+            </label>
+            <p className="text-xs text-slate-400 font-medium">Invoice Date: {new Date().toLocaleDateString('en-IN')}</p>
           </div>
         </div>
 
@@ -159,7 +192,7 @@ export const Sales: React.FC = () => {
                 <th className="p-3 border w-24">Qty</th>
                 <th className="p-3 border w-32">Rate</th>
                 <th className="p-3 border w-20">GST%</th>
-                <th className="p-3 border w-32">Amount</th>
+                <th className="p-3 border w-32 text-right">Amount</th>
                 <th className="p-3 border w-12"></th>
               </tr>
             </thead>
@@ -173,29 +206,29 @@ export const Sales: React.FC = () => {
                     </select>
                   </td>
                   <td className="p-2 border text-center text-slate-500 font-mono text-xs">{row.hsn}</td>
-                  <td className="p-2 border"><input type="number" value={row.qty} onChange={(e) => updateItemRow(idx, 'qty', parseFloat(e.target.value))} className="w-full p-1 border-none text-center focus:ring-0"/></td>
-                  <td className="p-2 border"><input type="number" value={row.rate} onChange={(e) => updateItemRow(idx, 'rate', parseFloat(e.target.value))} className="w-full p-1 border-none text-right focus:ring-0"/></td>
-                  <td className="p-2 border text-center text-slate-500 text-xs">{row.gstRate}%</td>
-                  <td className="p-2 border text-right font-medium">₹{(row.amount || 0).toLocaleString()}</td>
-                  <td className="p-2 border text-center"><button onClick={() => removeItemRow(idx)} className="text-rose-500 hover:bg-rose-50 p-1 rounded"><Trash2 size={16}/></button></td>
+                  <td className="p-2 border"><input type="number" value={row.qty} onChange={(e) => updateItemRow(idx, 'qty', parseFloat(e.target.value) || 0)} className="w-full p-1 border-none text-center focus:ring-0"/></td>
+                  <td className="p-2 border"><input type="number" value={row.rate} onChange={(e) => updateItemRow(idx, 'rate', parseFloat(e.target.value) || 0)} className="w-full p-1 border-none text-right focus:ring-0"/></td>
+                  <td className="p-2 border text-center text-slate-500 text-xs font-bold">{row.gstRate}%</td>
+                  <td className="p-2 border text-right font-black">₹{(row.amount || 0).toLocaleString()}</td>
+                  <td className="p-2 border text-center"><button type="button" onClick={() => removeItemRow(idx)} className="text-rose-500 hover:bg-rose-50 p-1 rounded"><Trash2 size={16}/></button></td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <button onClick={addItemRow} className="mt-4 flex items-center gap-2 text-blue-700 font-semibold hover:underline"><Plus size={18}/> Add Item Line</button>
+          <button type="button" onClick={addItemRow} className="mt-4 flex items-center gap-2 text-blue-700 font-bold hover:underline"><Plus size={18}/> Add Item Line</button>
         </div>
 
-        <div className="p-6 bg-slate-50 flex flex-col items-end gap-2">
-          <div className="flex justify-between w-64 text-sm text-slate-600"><span>Sub Total:</span><span>₹{subTotal.toLocaleString()}</span></div>
+        <div className="p-6 bg-slate-50 flex flex-col items-end gap-2 border-t">
+          <div className="flex justify-between w-64 text-sm font-medium text-slate-600"><span>Taxable Value:</span><span>₹{subTotal.toLocaleString()}</span></div>
           {!isInterstate ? (
             <>
-              <div className="flex justify-between w-64 text-sm text-slate-600"><span>CGST:</span><span>₹{cgst.toLocaleString()}</span></div>
-              <div className="flex justify-between w-64 text-sm text-slate-600"><span>SGST:</span><span>₹{sgst.toLocaleString()}</span></div>
+              <div className="flex justify-between w-64 text-sm font-medium text-slate-600"><span>CGST:</span><span>₹{cgst.toLocaleString()}</span></div>
+              <div className="flex justify-between w-64 text-sm font-medium text-slate-600"><span>SGST:</span><span>₹{sgst.toLocaleString()}</span></div>
             </>
           ) : (
-            <div className="flex justify-between w-64 text-sm text-slate-600"><span>IGST:</span><span>₹{igst.toLocaleString()}</span></div>
+            <div className="flex justify-between w-64 text-sm font-bold text-purple-700"><span>IGST (Output):</span><span>₹{igst.toLocaleString()}</span></div>
           )}
-          <div className="flex justify-between w-64 text-lg font-bold text-slate-900 border-t border-slate-300 pt-2 mt-2"><span>Net Payable:</span><span>₹{total.toLocaleString()}</span></div>
+          <div className="flex justify-between w-64 text-xl font-black text-slate-900 border-t border-slate-300 pt-3 mt-2"><span>Total Amount:</span><span>₹{total.toLocaleString()}</span></div>
         </div>
       </div>
     );
@@ -207,58 +240,66 @@ export const Sales: React.FC = () => {
     
     return (
       <div className="max-w-4xl mx-auto bg-white p-12 shadow-2xl rounded-xl border border-slate-200 animate-in zoom-in-95 duration-300">
-        <div className="flex justify-between items-start border-b-2 border-slate-900 pb-8 mb-8">
+        <div className="flex justify-between items-start border-b-4 border-slate-900 pb-8 mb-8">
           <div>
-            <h1 className="text-3xl font-black text-blue-700 mb-2 uppercase tracking-tight">{companySettings.name}</h1>
-            <p className="text-sm font-black uppercase tracking-widest text-slate-500">Tax Invoice</p>
-            <p className="text-xs text-slate-500 mt-2 max-w-xs">{companySettings.address}</p>
-            <div className="text-xs font-bold mt-2 space-y-1">
-              <p>GSTIN: {companySettings.gstin} | State: {companySettings.state}</p>
+            <h1 className="text-4xl font-black text-blue-700 mb-2 uppercase tracking-tighter">{companySettings.name}</h1>
+            <p className="text-sm font-black uppercase tracking-widest text-slate-500 bg-slate-100 inline-block px-2 py-1 rounded">Tax Invoice</p>
+            <p className="text-xs text-slate-500 mt-4 max-w-sm leading-relaxed font-medium">{companySettings.address}</p>
+            <div className="text-xs font-black mt-4 space-y-1.5 text-slate-700">
+              <p className="flex items-center gap-2">GSTIN: <span className="text-blue-700">{companySettings.gstin}</span> | State: {companySettings.state}</p>
               <p>Email: {companySettings.email} | Mob: {companySettings.contact}</p>
             </div>
           </div>
           <div className="text-right">
-            <h2 className="text-2xl font-bold uppercase tracking-widest text-slate-300 mb-4">Invoice</h2>
-            <p className="text-sm"><span className="text-slate-500">Invoice No:</span> <span className="font-bold">{selectedInvoice.invoiceNo}</span></p>
-            <p className="text-sm"><span className="text-slate-500">Date:</span> <span className="font-bold">{selectedInvoice.date}</span></p>
+            <h2 className="text-2xl font-black uppercase tracking-[0.2em] text-slate-200 mb-6">Original</h2>
+            <div className="space-y-1">
+              <p className="text-[10px] font-black uppercase text-slate-400">Invoice No</p>
+              <p className="text-xl font-black text-slate-900">{selectedInvoice.invoiceNo}</p>
+              <p className="text-[10px] font-black uppercase text-slate-400 mt-2">Dated</p>
+              <p className="font-bold text-slate-800">{selectedInvoice.date}</p>
+            </div>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-12 mb-12">
-          <div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Billed To</p>
-            <p className="font-black text-xl text-slate-900">{selectedInvoice.accountName}</p>
-            <p className="text-sm text-slate-600 mt-1">{custAcc?.address}</p>
-            <p className="text-sm text-slate-600 font-bold mt-2">GSTIN: {custAcc?.gstin || 'Unregistered'}</p>
-            <p className="text-sm text-slate-600">State: {custAcc?.state}</p>
+          <div className="border-l-4 border-blue-700 pl-6">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Consignee (Billed To)</p>
+            <p className="font-black text-2xl text-slate-900">{selectedInvoice.accountName}</p>
+            <p className="text-sm text-slate-600 mt-2 font-medium leading-relaxed">{custAcc?.address}</p>
+            <div className="mt-4 space-y-1">
+              <p className="text-sm font-black text-slate-900">GSTIN: <span className="text-blue-700">{custAcc?.gstin || 'UNREGISTERED'}</span></p>
+              <p className="text-xs font-bold text-slate-500">State: {custAcc?.state} (Place of Supply)</p>
+            </div>
           </div>
-          <div className="text-right">
-            <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">Place of Supply</p>
-            <p className="text-sm text-slate-900 font-bold">{custAcc?.state}</p>
-            <p className="text-xs text-slate-400 mt-1 uppercase font-bold">{invoiceIsInterstate ? 'IGST (Inter-state)' : 'CGST/SGST (Intra-state)'}</p>
+          <div className="text-right bg-slate-50 p-6 rounded-xl border border-slate-100 self-start">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Transaction Type</p>
+            <p className="text-sm text-slate-900 font-black uppercase tracking-wider">
+              {invoiceIsInterstate ? 'Inter-state Sale (IGST)' : 'Intra-state Sale (CGST/SGST)'}
+            </p>
+            <p className="text-[10px] text-slate-400 mt-4 uppercase font-bold">POS Code: {custAcc?.state?.substring(0,2).toUpperCase() || 'NA'}</p>
           </div>
         </div>
 
-        <table className="w-full mb-12">
+        <table className="w-full mb-12 border-collapse">
           <thead>
-            <tr className="border-y-2 border-slate-900 text-left text-xs font-black uppercase tracking-widest">
-              <th className="py-3 px-2">#</th>
-              <th className="py-3 px-2">Description</th>
-              <th className="py-3 px-2">HSN</th>
-              <th className="py-3 px-2 text-right">Qty</th>
-              <th className="py-3 px-2 text-right">Rate</th>
-              <th className="py-3 px-2 text-right">Amount</th>
+            <tr className="border-y-4 border-slate-900 text-left text-[10px] font-black uppercase tracking-[0.1em]">
+              <th className="py-4 px-2 w-12">#</th>
+              <th className="py-4 px-2">Description of Goods</th>
+              <th className="py-4 px-2 w-24">HSN/SAC</th>
+              <th className="py-4 px-2 w-24 text-right">Quantity</th>
+              <th className="py-4 px-2 w-24 text-right">Rate</th>
+              <th className="py-4 px-2 w-32 text-right">Amount</th>
             </tr>
           </thead>
           <tbody>
             {selectedInvoice.items.map((it, idx) => (
               <tr key={idx} className="border-b border-slate-100">
-                <td className="py-4 px-2 text-sm">{idx + 1}</td>
-                <td className="py-4 px-2 text-sm font-bold">{it.name}</td>
-                <td className="py-4 px-2 text-sm text-slate-500 font-mono">{it.hsn}</td>
-                <td className="py-4 px-2 text-sm text-right">{it.qty}</td>
-                <td className="py-4 px-2 text-sm text-right">₹{it.rate.toLocaleString()}</td>
-                <td className="py-4 px-2 text-sm text-right font-black">₹{it.amount.toLocaleString()}</td>
+                <td className="py-5 px-2 text-xs font-bold text-slate-400">{idx + 1}</td>
+                <td className="py-5 px-2 text-sm font-black text-slate-800">{it.name}</td>
+                <td className="py-5 px-2 text-xs text-slate-500 font-mono font-bold tracking-tighter">{it.hsn}</td>
+                <td className="py-5 px-2 text-sm text-right font-bold">{it.qty}</td>
+                <td className="py-5 px-2 text-sm text-right font-bold">₹{it.rate.toLocaleString()}</td>
+                <td className="py-5 px-2 text-sm text-right font-black">₹{it.amount.toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
@@ -266,48 +307,51 @@ export const Sales: React.FC = () => {
 
         <div className="grid grid-cols-2 gap-12 mb-12">
           <div className="space-y-6">
-            <div>
-              <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2"><CreditCard size={12}/> Bank Details</p>
-              <div className="text-xs space-y-1 text-slate-600 font-medium">
-                <p>Bank: <span className="font-bold">{companySettings.bankName}</span></p>
-                <p>A/c No: <span className="font-bold">{companySettings.bankAccNo}</span></p>
-                <p>IFSC: <span className="font-bold">{companySettings.bankIfsc}</span></p>
+            <div className="bg-slate-50 p-6 rounded-xl border border-slate-100">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2"><CreditCard size={12}/> Bank Account for Settlement</p>
+              <div className="text-xs space-y-1.5 text-slate-700 font-bold">
+                <p>Bank: <span className="text-blue-700">{companySettings.bankName}</span></p>
+                <p>A/c No: {companySettings.bankAccNo}</p>
+                <p>IFSC: {companySettings.bankIfsc}</p>
                 <p>Branch: {companySettings.bankBranch}</p>
               </div>
             </div>
             <div>
-              <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Terms & Conditions</p>
-              <p className="text-[10px] text-slate-500 whitespace-pre-line leading-relaxed">{companySettings.terms}</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Terms & Declaration</p>
+              <p className="text-[9px] text-slate-500 whitespace-pre-line leading-relaxed italic">{companySettings.terms}</p>
             </div>
           </div>
-          <div className="space-y-3">
-            <div className="flex justify-between text-sm"><span className="text-slate-500 font-bold uppercase">Sub-Total</span><span className="font-bold">₹{selectedInvoice.subTotal.toLocaleString()}</span></div>
+          <div className="space-y-3 bg-white p-6 rounded-xl border-2 border-slate-900 shadow-xl relative -top-6">
+            <div className="flex justify-between text-xs font-bold"><span className="text-slate-500 uppercase">Taxable Value</span><span>₹{selectedInvoice.subTotal.toLocaleString()}</span></div>
             {!invoiceIsInterstate ? (
               <>
-                <div className="flex justify-between text-sm"><span className="text-slate-500 font-bold uppercase text-[10px]">CGST</span><span className="font-bold">₹{selectedInvoice.cgst.toLocaleString()}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-slate-500 font-bold uppercase text-[10px]">SGST</span><span className="font-bold">₹{selectedInvoice.sgst.toLocaleString()}</span></div>
+                <div className="flex justify-between text-xs font-bold"><span className="text-slate-500 uppercase">CGST</span><span>₹{selectedInvoice.cgst.toLocaleString()}</span></div>
+                <div className="flex justify-between text-xs font-bold"><span className="text-slate-500 uppercase">SGST</span><span>₹{selectedInvoice.sgst.toLocaleString()}</span></div>
               </>
             ) : (
-              <div className="flex justify-between text-sm"><span className="text-slate-500 font-bold uppercase text-[10px]">IGST</span><span className="font-bold">₹{selectedInvoice.igst.toLocaleString()}</span></div>
+              <div className="flex justify-between text-xs font-bold border-y border-purple-100 py-1"><span className="text-purple-700 uppercase">IGST (Inter-state)</span><span className="text-purple-900">₹{selectedInvoice.igst.toLocaleString()}</span></div>
             )}
-            <div className="flex justify-between text-2xl font-black border-t-4 border-slate-900 pt-4 mt-4"><span>TOTAL</span><span className="text-blue-700">₹{selectedInvoice.total.toLocaleString()}</span></div>
-            <p className="text-[10px] text-right font-bold text-slate-400 uppercase tracking-widest italic pt-2">E. & O.E.</p>
+            <div className="flex justify-between text-3xl font-black border-t-2 border-slate-200 pt-4 mt-4 text-blue-700">
+              <span className="text-xs self-center text-slate-400 tracking-tighter">TOTAL PAYABLE</span>
+              <span>₹{selectedInvoice.total.toLocaleString()}</span>
+            </div>
+            <p className="text-[10px] text-right font-bold text-slate-400 uppercase tracking-[0.2em] pt-4">Subject to {companySettings.state} Jurisdiction</p>
           </div>
         </div>
 
         <div className="mt-12 pt-12 border-t border-slate-100 flex justify-between items-center text-center">
-          <div className="w-48 border-t border-slate-300 pt-2 text-[10px] font-bold text-slate-400 uppercase">Receiver's Signature</div>
+          <div className="w-48 border-t-2 border-slate-900 pt-2 text-[9px] font-black text-slate-900 uppercase">Receiver's Seal & Sign</div>
           <div className="w-64">
-            <p className="text-[10px] font-bold text-slate-500 uppercase mb-8">For {companySettings.name}</p>
-            <div className="border-t border-slate-300 pt-2 text-[10px] font-bold text-slate-400 uppercase">Authorised Signatory</div>
+            <p className="text-[9px] font-black text-slate-900 uppercase mb-12 italic">For {companySettings.name}</p>
+            <div className="border-t-2 border-slate-900 pt-2 text-[9px] font-black text-slate-900 uppercase">Authorised Signatory</div>
           </div>
         </div>
 
         <div className="flex justify-between items-end border-t border-slate-200 pt-12 no-print">
-          <button onClick={resetForm} className="flex items-center gap-2 text-slate-500 font-bold hover:text-slate-800"><ArrowLeft size={18}/> Back to List</button>
-          <div className="flex gap-3">
-            <button onClick={() => handleEdit(selectedInvoice)} className="bg-slate-100 text-slate-700 px-6 py-4 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-200"><Edit size={18}/> Edit Invoice</button>
-            <button onClick={() => window.print()} className="bg-slate-900 text-white px-10 py-4 rounded-xl font-black flex items-center gap-3 hover:bg-black transition-all shadow-xl shadow-slate-200"><Printer size={18}/> Print Tax Invoice</button>
+          <button type="button" onClick={resetForm} className="flex items-center gap-2 text-slate-500 font-bold hover:text-slate-800 transition-all"><ArrowLeft size={18}/> Back to Register</button>
+          <div className="flex gap-4">
+            <button type="button" onClick={() => handleEdit(selectedInvoice)} className="bg-slate-100 text-slate-700 px-6 py-4 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-200 transition-all"><Edit size={18}/> Modify Entry</button>
+            <button type="button" onClick={() => window.print()} className="bg-blue-700 text-white px-10 py-4 rounded-xl font-black flex items-center gap-3 hover:bg-blue-800 transition-all shadow-xl shadow-blue-100"><Printer size={18}/> Print Tax Invoice</button>
           </div>
         </div>
       </div>
@@ -318,7 +362,7 @@ export const Sales: React.FC = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Sales Register</h2>
-        <button onClick={() => setView('create')} className="bg-blue-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-800 shadow-md transition-all"><Plus size={20}/> New Invoice</button>
+        <button type="button" onClick={() => setView('create')} className="bg-blue-700 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-800 shadow-md transition-all font-bold"><Plus size={20}/> New Invoice</button>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -336,17 +380,31 @@ export const Sales: React.FC = () => {
           <tbody className="divide-y divide-slate-100">
             {invoices.filter(i => i.type === 'Sales').map(inv => (
               <tr key={inv.id} className="hover:bg-slate-50 cursor-pointer transition-colors group" onClick={() => { setSelectedInvoice(inv); setView('view'); }}>
-                <td className="p-4 text-sm">{inv.date}</td>
-                <td className="p-4 font-bold text-slate-900">{inv.invoiceNo}</td>
-                <td className="p-4 text-sm font-semibold">{inv.accountName}</td>
+                <td className="p-4 text-sm font-medium">{inv.date}</td>
+                <td className="p-4 font-black text-slate-900">{inv.invoiceNo}</td>
+                <td className="p-4 text-sm font-bold text-slate-700">{inv.accountName}</td>
                 <td className="p-4 text-right font-black text-blue-700">₹{inv.total.toLocaleString()}</td>
-                <td className="p-4 text-xs font-black text-slate-400 uppercase tracking-widest">{inv.igst > 0 ? 'IGST' : 'CGST/SGST'}</td>
+                <td className="p-4">
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-tighter ${inv.igst > 0 ? 'bg-purple-50 text-purple-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                    {inv.igst > 0 ? 'IGST (Inter)' : 'CGST/SGST'}
+                  </span>
+                </td>
                 <td className="p-4">
                   <div className="flex justify-center gap-3">
-                    <button onClick={(e) => { e.stopPropagation(); handleEdit(inv); }} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Edit">
+                    <button 
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleEdit(inv); }} 
+                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors" 
+                      title="Edit"
+                    >
                       <Edit size={18} />
                     </button>
-                    <button onClick={(e) => handleDelete(inv.id, e)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors" title="Delete">
+                    <button 
+                      type="button"
+                      onClick={(e) => handleDelete(inv.id, e)} 
+                      className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md transition-colors" 
+                      title="Delete"
+                    >
                       <Trash2 size={18} />
                     </button>
                   </div>

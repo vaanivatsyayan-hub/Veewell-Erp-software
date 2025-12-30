@@ -11,11 +11,81 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     body { font-family: 'Inter', sans-serif; }
+    
     @media print {
-      .no-print { display: none !important; }
+      /* Reset layout for printing - ensure full content is visible */
+      html, body, #root {
+        height: auto !important;
+        overflow: visible !important;
+        background-color: white !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      /* Reset the main layout containers from flex to block */
+      main {
+        display: block !important;
+        height: auto !important;
+        overflow: visible !important;
+        width: 100% !important;
+        position: static !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      /* Reset the viewport div in Layout.tsx */
+      .flex-1.overflow-y-auto {
+        display: block !important;
+        height: auto !important;
+        overflow: visible !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        position: static !important;
+      }
+
+      /* Hide sidebars, headers, and UI controls */
+      .no-print, 
+      aside, 
+      header,
+      button.no-print {
+        display: none !important;
+      }
+
+      /* Professional invoice printing - remove card shadows and borders */
+      .max-w-4xl, .bg-white, .rounded-xl {
+        max-width: 100% !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        border: none !important;
+        border-radius: 0 !important;
+      }
+
+      /* Disable animations that might interfere with print rendering */
+      .animate-in, .zoom-in-95, .duration-300, .transition-all {
+        animation: none !important;
+        transform: none !important;
+        opacity: 1 !important;
+        transition: none !important;
+      }
+
+      /* Color management for print */
+      * {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      /* Page margin settings */
+      @page {
+        margin: 1.5cm;
+      }
+    }
+
+    .print-only { display: none; }
+    @media print {
       .print-only { display: block !important; }
     }
-    .print-only { display: none; }
     
     /* Animation for smooth transitions */
     .fade-enter { opacity: 0; transform: translateY(10px); }

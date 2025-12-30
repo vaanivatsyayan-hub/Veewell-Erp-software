@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Item, Account, Invoice, Voucher, BOM, AccountType, CompanySettings } from '../types';
 
 interface User {
@@ -22,6 +22,8 @@ interface ERPContextType {
   logout: () => void;
   updateCompanySettings: (settings: CompanySettings) => void;
   addItem: (item: Item) => void;
+  updateItem: (item: Item) => void;
+  deleteItem: (id: string) => void;
   updateItemStock: (id: string, change: number) => void;
   addAccount: (account: Account) => void;
   updateAccount: (account: Account) => void;
@@ -30,6 +32,8 @@ interface ERPContextType {
   updateInvoice: (invoice: Invoice) => void;
   deleteInvoice: (id: string) => void;
   addVoucher: (voucher: Voucher) => void;
+  updateVoucher: (voucher: Voucher) => void;
+  deleteVoucher: (id: string) => void;
   addBOM: (bom: BOM) => void;
   getAccountBalance: (id: string) => number;
   importERPData: (data: string) => boolean;
@@ -113,79 +117,135 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, [items, accounts, invoices, vouchers, boms, isLoaded]);
 
-  const login = (userData: User) => {
+  const login = useCallback((userData: User) => {
     setUser(userData);
     setIsAuthenticated(true);
     localStorage.setItem(AUTH_KEY, JSON.stringify(userData));
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setUser(null);
     setIsAuthenticated(false);
     localStorage.removeItem(AUTH_KEY);
-  };
+  }, []);
 
-  const updateCompanySettings = (settings: CompanySettings) => {
+  const updateCompanySettings = useCallback((settings: CompanySettings) => {
     setCompanySettings(settings);
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  };
+  }, []);
 
-  const addItem = (item: Item) => setItems(prev => [...prev, item]);
-  const updateItemStock = (id: string, change: number) => {
+  const addItem = useCallback((item: Item) => setItems(prev => [...prev, item]), []);
+  
+  const updateItem = useCallback((updatedItem: Item) => {
+    setItems(prev => prev.map(it => it.id === updatedItem.id ? updatedItem : it));
+  }, []);
+
+  const deleteItem = useCallback((id: string) => {
+    setItems(prev => prev.filter(it => it.id !== id));
+  }, []);
+
+  const updateItemStock = useCallback((id: string, change: number) => {
     setItems(prev => prev.map(it => it.id === id ? { ...it, stock: it.stock + change } : it));
-  };
-  const addAccount = (account: Account) => setAccounts(prev => [...prev, account]);
-  const updateAccount = (updatedAccount: Account) => {
+  }, []);
+  
+  const addAccount = useCallback((account: Account) => setAccounts(prev => [...prev, account]), []);
+  
+  const updateAccount = useCallback((updatedAccount: Account) => {
     setAccounts(prev => prev.map(acc => acc.id === updatedAccount.id ? updatedAccount : acc));
-  };
-  const deleteAccount = (id: string) => setAccounts(prev => prev.filter(acc => acc.id !== id));
+  }, []);
 
-  const addInvoice = (inv: Invoice) => {
+  const deleteAccount = useCallback((id: string) => setAccounts(prev => prev.filter(acc => acc.id !== id)), []);
+
+  const addInvoice = useCallback((inv: Invoice) => {
     setInvoices(prev => [...prev, inv]);
-    if (inv.type === 'Sales') {
-      setAccounts(prev => prev.map(acc => acc.id === inv.accountId ? { ...acc, balance: acc.balance + inv.total } : acc));
-      inv.items.forEach(item => updateItemStock(item.itemId, -item.qty));
-    } else if (inv.type === 'Purchase') {
-      setAccounts(prev => prev.map(acc => acc.id === inv.accountId ? { ...acc, balance: acc.balance - inv.total } : acc));
-      inv.items.forEach(item => updateItemStock(item.itemId, item.qty));
-    }
-  };
+    
+    // Update accounts
+    setAccounts(prev => prev.map(acc => {
+      if (acc.id === inv.accountId) {
+        return { ...acc, balance: inv.type === 'Sales' ? acc.balance + inv.total : acc.balance - inv.total };
+      }
+      return acc;
+    }));
 
-  const deleteInvoice = (id: string) => {
-    const inv = invoices.find(i => i.id === id);
-    if (!inv) return;
+    // Batch update item stock
+    setItems(prev => prev.map(it => {
+      const invItem = inv.items.find(item => item.itemId === it.id);
+      if (invItem) {
+        return { ...it, stock: inv.type === 'Sales' ? it.stock - invItem.qty : it.stock + invItem.qty };
+      }
+      return it;
+    }));
+  }, []);
 
-    // Revert accounting impact
-    if (inv.type === 'Sales') {
-      setAccounts(prev => prev.map(acc => acc.id === inv.accountId ? { ...acc, balance: acc.balance - inv.total } : acc));
-      inv.items.forEach(item => updateItemStock(item.itemId, item.qty));
-    } else if (inv.type === 'Purchase') {
-      setAccounts(prev => prev.map(acc => acc.id === inv.accountId ? { ...acc, balance: acc.balance + inv.total } : acc));
-      inv.items.forEach(item => updateItemStock(item.itemId, -item.qty));
-    }
+  const deleteInvoice = useCallback((id: string) => {
+    setInvoices(prevInvoices => {
+      const targetInvoice = prevInvoices.find(i => i.id === id);
+      if (!targetInvoice) return prevInvoices;
 
-    setInvoices(prev => prev.filter(i => i.id !== id));
-  };
+      // 1. Revert Ledger Balances
+      setAccounts(prevAccs => prevAccs.map(acc => {
+        if (acc.id === targetInvoice.accountId) {
+          const reversion = targetInvoice.type === 'Sales' ? -targetInvoice.total : targetInvoice.total;
+          return { ...acc, balance: acc.balance + reversion };
+        }
+        return acc;
+      }));
 
-  const updateInvoice = (updatedInv: Invoice) => {
-    // To handle an update safely, we delete the old version (reverting stocks/balances) 
-    // and add the new version (applying new stocks/balances)
+      // 2. Revert Stock
+      setItems(prevItems => prevItems.map(it => {
+        const invItem = targetInvoice.items.find(item => item.itemId === it.id);
+        if (invItem) {
+          const stockReversion = targetInvoice.type === 'Sales' ? invItem.qty : -invItem.qty;
+          return { ...it, stock: it.stock + stockReversion };
+        }
+        return it;
+      }));
+
+      return prevInvoices.filter(i => i.id !== id);
+    });
+  }, []);
+
+  const updateInvoice = useCallback((updatedInv: Invoice) => {
     deleteInvoice(updatedInv.id);
     addInvoice(updatedInv);
-  };
+  }, [deleteInvoice, addInvoice]);
 
-  const addVoucher = (vch: Voucher) => {
+  const addVoucher = useCallback((vch: Voucher) => {
     setVouchers(prev => [...prev, vch]);
     setAccounts(prev => prev.map(acc => {
       if (acc.id === vch.drAccountId) return { ...acc, balance: acc.balance + vch.amount };
       if (acc.id === vch.crAccountId) return { ...acc, balance: acc.balance - vch.amount };
       return acc;
     }));
-  };
+  }, []);
+
+  const deleteVoucher = useCallback((id: string) => {
+    setVouchers(prevVouchers => {
+      const vch = prevVouchers.find(v => v.id === id);
+      if (!vch) return prevVouchers;
+
+      // Revert Ledger Balances
+      setAccounts(prevAccs => prevAccs.map(acc => {
+        if (acc.id === vch.drAccountId) return { ...acc, balance: acc.balance - vch.amount };
+        if (acc.id === vch.crAccountId) return { ...acc, balance: acc.balance + vch.amount };
+        return acc;
+      }));
+
+      return prevVouchers.filter(v => v.id !== id);
+    });
+  }, []);
+
+  const updateVoucher = useCallback((updatedVch: Voucher) => {
+    deleteVoucher(updatedVch.id);
+    addVoucher(updatedVch);
+  }, [deleteVoucher, addVoucher]);
   
-  const addBOM = (bom: BOM) => setBoms(prev => [...prev, bom]);
+  const addBOM = useCallback((bom: BOM) => setBoms(prev => [...prev, bom]), []);
+  
   const getAccountBalance = (id: string) => accounts.find(a => a.id === id)?.balance || 0;
+  
   const exportERPData = () => JSON.stringify({ items, accounts, invoices, vouchers, boms, companySettings }, null, 2);
+  
   const importERPData = (dataStr: string) => {
     try {
       const parsed = JSON.parse(dataStr);
@@ -205,8 +265,8 @@ export const ERPProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   return (
     <ERPContext.Provider value={{ 
       user, isAuthenticated, companySettings, items, accounts, invoices, vouchers, boms,
-      login, logout, updateCompanySettings, addItem, updateItemStock, addAccount, updateAccount, deleteAccount, 
-      addInvoice, updateInvoice, deleteInvoice, addVoucher, addBOM, getAccountBalance,
+      login, logout, updateCompanySettings, addItem, updateItem, deleteItem, updateItemStock, addAccount, updateAccount, deleteAccount, 
+      addInvoice, updateInvoice, deleteInvoice, addVoucher, updateVoucher, deleteVoucher, addBOM, getAccountBalance,
       importERPData, exportERPData
     }}>
       {children}
